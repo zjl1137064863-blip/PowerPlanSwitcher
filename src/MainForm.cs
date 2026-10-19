@@ -4,364 +4,264 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace PowerPlanSwitcher
 {
-    internal static class NativeMethods
-    {
-        internal static readonly uint ShowMessage = RegisterWindowMessage("PowerPlanSwitcher.Show.7D43B3AE");
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        private static extern uint RegisterWindowMessage(string name);
-        [DllImport("user32.dll")]
-        internal static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
-        [DllImport("user32.dll")]
-        internal static extern bool ReleaseCapture();
-        [DllImport("user32.dll")]
-        internal static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wparam, IntPtr lparam);
-        [DllImport("user32.dll")]
-        internal static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
-        [DllImport("user32.dll")]
-        internal static extern bool UnregisterHotKey(IntPtr window, int id);
-        [DllImport("user32.dll")]
-        internal static extern bool DestroyIcon(IntPtr icon);
-    }
-
-    internal static class Theme
-    {
-        internal static readonly Color Background = Color.FromArgb(18, 23, 30);
-        internal static readonly Color Surface = Color.FromArgb(27, 34, 43);
-        internal static readonly Color Muted = Color.FromArgb(144, 158, 173);
-        internal static readonly Color Text = Color.FromArgb(235, 241, 246);
-        internal static readonly Color Accent = Color.FromArgb(123, 232, 195);
-        internal static Font Font(float size, FontStyle style = FontStyle.Regular)
-        { return new Font("Microsoft YaHei UI", size, style, GraphicsUnit.Point); }
-        internal static GraphicsPath Round(RectangleF rect, float radius)
-        {
-            var path = new GraphicsPath();
-            float d = radius * 2;
-            path.AddArc(rect.X, rect.Y, d, d, 180, 90);
-            path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
-            path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
-            path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
-            path.CloseFigure();
-            return path;
-        }
-    }
-
-    internal sealed class FlatButton : Button
-    {
-        private bool hover;
-        internal FlatButton(string text)
-        {
-            Text = text; FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0;
-            BackColor = Theme.Background; ForeColor = Theme.Muted; Font = Theme.Font(9);
-            Cursor = Cursors.Hand; SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-        }
-        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.Clear(hover ? Theme.Surface : BackColor);
-            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle,
-                Enabled ? (hover ? Theme.Text : ForeColor) : Theme.Muted,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
-        }
-    }
-
-    internal sealed class PlanButton : Button
-    {
-        internal PowerPlan Plan { get; private set; }
-        internal string Shortcut { get; set; }
-        private readonly float scale;
-        private bool hover;
-        internal PlanButton(PowerPlan plan, float scale)
-        {
-            this.scale = scale; Plan = plan; Shortcut = "点击切换";
-            FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0;
-            BackColor = Theme.Background; Cursor = Cursors.Hand;
-            AccessibleName = plan.Name + (plan.IsActive ? "，当前计划" : "，切换到此计划");
-            SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-        }
-        private int S(float value) { return (int)Math.Round(value * scale); }
-        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.Clear(BackColor);
-            RectangleF bounds = new RectangleF(1, 1, Width - 3, Height - 3);
-            using (var path = Theme.Round(bounds, S(12)))
-            using (var brush = new SolidBrush(Plan.IsActive ? Color.FromArgb(30, 48, 46) : hover ? Color.FromArgb(34, 43, 54) : Theme.Surface))
-            using (var pen = new Pen(Plan.IsActive ? Theme.Accent : Color.FromArgb(43, 53, 65), Plan.IsActive ? S(1.5f) : 1))
-            { g.FillPath(brush, path); g.DrawPath(pen, path); }
-            Color tint = GetTint(Plan);
-            using (var brush = new SolidBrush(Color.FromArgb(36, tint)))
-            using (var path = Theme.Round(new RectangleF(S(17), S(18), S(44), S(44)), S(12)))
-                g.FillPath(brush, path);
-            DrawSymbol(g, new Rectangle(S(29), S(29), S(21), S(22)), Plan, tint, scale);
-            using (var font = Theme.Font(11, FontStyle.Bold))
-                TextRenderer.DrawText(g, Plan.Name, font, new Rectangle(S(76), S(15), Width - S(185), S(28)), Theme.Text,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-            using (var font = Theme.Font(8.5f))
-                TextRenderer.DrawText(g, Description(Plan), font, new Rectangle(S(76), S(43), Width - S(105), S(24)), Theme.Muted,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-            using (var font = Theme.Font(8))
-                TextRenderer.DrawText(g, Plan.IsActive ? "● 使用中" : Shortcut, font,
-                    new Rectangle(Width - S(111), S(18), S(96), S(24)), Plan.IsActive ? Theme.Accent : Theme.Muted,
-                    TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
-            if (Focused) ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(ClientRectangle, -S(6), -S(6)), Theme.Accent, BackColor);
-        }
-        private static int Kind(PowerPlan plan)
-        {
-            string name = plan.Name.ToLowerInvariant();
-            if (plan.Id == new Guid("8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c") || name.Contains("性能") || name.Contains("performance")) return 1;
-            if (plan.Id == new Guid("a1841308-3541-4fab-bc81-f71556f20b4a") || name.Contains("节能") || name.Contains("saver")) return 2;
-            if (name.Contains("静音") || name.Contains("silent")) return 3;
-            if (plan.Id == new Guid("381b4222-f694-41f0-9685-ff5bb260df2e")) return 0;
-            return 4;
-        }
-        private static Color GetTint(PowerPlan plan)
-        {
-            switch (Kind(plan))
-            {
-                case 1: return Color.FromArgb(255, 187, 128);
-                case 2: return Theme.Accent;
-                case 3: return Color.FromArgb(190, 171, 244);
-                default: return Color.FromArgb(134, 189, 249);
-            }
-        }
-        private static string Description(PowerPlan plan)
-        {
-            switch (Kind(plan))
-            {
-                case 0: return "兼顾日常性能与能源消耗";
-                case 1: return "性能优先，适合高负载任务";
-                case 2: return "节约用电，延长电池续航";
-                default: return "使用此计划在 Windows 中的配置";
-            }
-        }
-        internal static void DrawSymbol(Graphics g, Rectangle r, PowerPlan plan, Color tint, float scale)
-        {
-            using (var pen = new Pen(tint, 1.7f * scale))
-            {
-                pen.StartCap = pen.EndCap = LineCap.Round;
-                int kind = Kind(plan);
-                if (kind == 1)
-                {
-                    var points = new PointF[] { new PointF(r.X + r.Width * .6f, r.Y), new PointF(r.X + r.Width * .12f, r.Y + r.Height * .55f),
-                        new PointF(r.X + r.Width * .49f, r.Y + r.Height * .55f), new PointF(r.X + r.Width * .37f, r.Bottom),
-                        new PointF(r.Right, r.Y + r.Height * .38f), new PointF(r.X + r.Width * .6f, r.Y + r.Height * .38f), new PointF(r.X + r.Width * .6f, r.Y) };
-                    g.DrawLines(pen, points);
-                }
-                else if (kind == 2)
-                {
-                    g.DrawArc(pen, r, 0, 300);
-                    g.DrawLine(pen, r.X + r.Width / 4, r.Bottom, r.Right - r.Width / 4, r.Y + r.Height / 3);
-                }
-                else if (kind == 3)
-                {
-                    g.DrawArc(pen, r, 60, 285);
-                    g.DrawArc(pen, new Rectangle(r.X + r.Width / 3, r.Y - r.Height / 5, r.Width, r.Height), 85, 145);
-                }
-                else
-                {
-                    g.DrawLine(pen, r.X, r.Y + r.Height / 3, r.Right, r.Y + r.Height / 3);
-                    g.DrawLine(pen, r.X, r.Y + r.Height * 2 / 3, r.Right, r.Y + r.Height * 2 / 3);
-                    g.DrawEllipse(pen, r.X + r.Width / 4, r.Y + r.Height / 3 - 3 * scale, 6 * scale, 6 * scale);
-                    g.DrawEllipse(pen, r.X + r.Width * 2 / 3, r.Y + r.Height * 2 / 3 - 3 * scale, 6 * scale, 6 * scale);
-                }
-            }
-        }
-    }
-
     internal sealed class MainForm : Form
     {
         private readonly PowerPlanService service;
         private readonly bool startInTray, preview;
-        private readonly float scale;
         private readonly NotifyIcon tray;
         private readonly Icon appIcon;
-        private readonly FlowLayoutPanel list;
-        private readonly Label activeName, status, countLabel;
-        private readonly CheckBox hotkeys;
-        private readonly FlatButton refresh;
+        private readonly TableLayoutPanel root, list;
+        private readonly Label activeName, status, sectionTitle;
+        private readonly SettingRow hotkeyRow, trayRow;
+        private readonly ToggleSwitch hotkeys, closeToTray;
+        private readonly Button refresh;
         private readonly Timer sync;
+        private readonly ToolTip tips = new ToolTip();
         private readonly List<int> registeredKeys = new List<int>();
         private readonly Dictionary<int, Guid> keyPlans = new Dictionary<int, Guid>();
+        private readonly string settingsPath;
+        private readonly Theme themeOverride;
+        private AppSettings settings;
+        private Theme theme;
         private IList<PowerPlan> plans = new List<PowerPlan>();
-        private bool busy, exiting, hadHiddenTip;
-        private string signature = "";
-        private readonly string settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.ini");
+        private bool busy, exiting, resourcesDisposed, restoringSettings, hadHiddenTip, statusError, menuUpdatePending;
+        private string signature = "", catalogSignature = "", startupWarning = "", hotkeyWarning = "";
+        internal bool InitialLoadComplete { get; private set; }
 
-        internal MainForm(PowerPlanService service, bool startInTray, bool preview)
+        internal MainForm(PowerPlanService service, bool startInTray, bool preview,
+            string settingsFile = null, Theme themeOverride = null)
         {
             this.service = service; this.startInTray = startInTray; this.preview = preview;
-            using (Graphics g = CreateGraphics()) scale = g.DpiX / 96f;
-            Text = "电源计划切换器"; BackColor = Theme.Background; ForeColor = Theme.Text;
-            Font = Theme.Font(9); AutoScaleMode = AutoScaleMode.None;
-            FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(S(560), S(806));
-            if (Height > Screen.PrimaryScreen.WorkingArea.Height - S(20))
-                Height = Screen.PrimaryScreen.WorkingArea.Height - S(20);
-            DoubleBuffered = true;
+            this.themeOverride = themeOverride; theme = themeOverride ?? Theme.ReadSystem();
+            settingsPath = settingsFile ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.ini");
+            try { settings = AppSettings.Load(settingsPath); }
+            catch (Exception ex) { settings = new AppSettings(); startupWarning = "无法读取偏好设置：" + ex.Message; }
+
+            SuspendLayout();
+            AutoScaleDimensions = new SizeF(96, 96); AutoScaleMode = AutoScaleMode.Dpi;
+            Font = Theme.Font(9); Text = "Power Switch";
+            FormBorderStyle = FormBorderStyle.Sizable; MaximizeBox = MinimizeBox = true;
+            StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(560, 692);
+            MinimumSize = new Size(460, 510); DoubleBuffered = true;
             appIcon = CreateIcon(); Icon = appIcon;
 
-            Label brand = Label("◉  POWER SWITCH", 10, Theme.Accent, FontStyle.Bold);
-            Place(brand, 28, 20, 300, 26);
-            brand.MouseDown += DragWindow; MouseDown += DragWindow;
-            FlatButton hide = Button("─", 470, 17, 28, 28, delegate { HideToTray(); });
-            hide.AccessibleName = "最小化到托盘";
-            FlatButton close = Button("×", 505, 17, 28, 28, delegate { HideToTray(); });
-            close.AccessibleName = "关闭窗口并驻留托盘";
-            Place(Label("电源计划", 25, Theme.Text, FontStyle.Bold), 27, 65, 380, 49);
-            Place(Label("在性能与续航之间，一键切换。", 9.5f, Theme.Muted), 29, 117, 410, 25);
-            refresh = Button("↻  刷新", 454, 119, 76, 28, async delegate { await RefreshPlans(true); });
+            root = new TableLayoutPanel { Name = "layout", Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6,
+                Padding = new Padding(20), Margin = Padding.Empty, TabStop = false };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            foreach (float height in new[] { 80f, 36f, 0f, 32f, 112f, 48f })
+                root.RowStyles.Add(new RowStyle(height == 0 ? SizeType.Percent : SizeType.Absolute, height == 0 ? 100 : height));
+            Controls.Add(root);
 
-            var hero = new Panel { BackColor = Color.FromArgb(27, 43, 42) };
-            Place(hero, 29, 163, 502, 92);
-            var activeTitle = Label("●  正在使用", 8.5f, Theme.Accent);
-            activeTitle.SetBounds(S(17), S(12), S(250), S(23)); hero.Controls.Add(activeTitle);
-            activeName = Label("读取中…", 18, Theme.Text, FontStyle.Bold);
-            activeName.SetBounds(S(14), S(39), S(450), S(39)); hero.Controls.Add(activeName);
+            var heading = Table(2, 3);
+            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
+            heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
+            heading.Controls.Add(Label("◉  Power Switch", 9, true), 0, 0);
+            refresh = Button("刷新", "refresh");
+            refresh.Click += async delegate { await RefreshPlans(true); };
+            heading.Controls.Add(refresh, 1, 0);
+            var title = Label("电源计划", 20, true); heading.Controls.Add(title, 0, 1); heading.SetColumnSpan(title, 2);
+            var subtitle = Label("选择电源方案；点击左侧图标可更换表情。", 9, false);
+            heading.Controls.Add(subtitle, 0, 2); heading.SetColumnSpan(subtitle, 2);
+            root.Controls.Add(heading, 0, 0);
 
-            Place(Label("选择电源计划", 10, Theme.Text, FontStyle.Bold), 28, 274, 250, 28);
-            countLabel = Label("", 8.5f, Theme.Muted); countLabel.TextAlign = ContentAlignment.MiddleRight;
-            Place(countLabel, 412, 274, 118, 28);
-            list = new FlowLayoutPanel { AutoScroll = true, FlowDirection = FlowDirection.TopDown,
-                WrapContents = false, BackColor = Theme.Background, Padding = Padding.Empty };
-            Place(list, 28, 313, 518, Height / scale - 433);
-            list.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
-            list.SizeChanged += delegate { SizeCards(); };
+            var section = Table(2, 1);
+            section.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            section.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
+            sectionTitle = Label("电源方案", 9.5f, true); section.Controls.Add(sectionTitle, 0, 0);
+            activeName = Label("当前：读取中…", 9, false); activeName.TextAlign = ContentAlignment.MiddleRight;
+            activeName.Name = "activeName"; section.Controls.Add(activeName, 1, 0);
+            root.Controls.Add(section, 0, 1);
 
-            hotkeys = new CheckBox { Text = "启用快捷键  Ctrl + Alt + 1 ~ 9", AutoSize = false,
-                ForeColor = Theme.Muted, Font = Theme.Font(8.5f), BackColor = Theme.Background,
-                Cursor = Cursors.Hand, AccessibleName = "启用全局快捷键 Ctrl 加 Alt 加数字 1 到 9" };
-            hotkeys.SetBounds(S(30), Height - S(112), S(480), S(28));
-            hotkeys.Anchor = AnchorStyles.Left | AnchorStyles.Bottom; Controls.Add(hotkeys);
-            try { hotkeys.Checked = !preview && File.Exists(settingsPath) && File.ReadAllText(settingsPath).Trim() == "hotkeys=1"; }
-            catch { hotkeys.Checked = false; }
-            hotkeys.CheckedChanged += delegate
-            {
-                ConfigureHotkeys();
-                try { File.WriteAllText(settingsPath, hotkeys.Checked ? "hotkeys=1" : "hotkeys=0"); }
-                catch (Exception ex) { ShowStatus("快捷键已更新，但无法保存偏好：" + ex.Message, true); }
-            };
-            status = Label("正在读取 Windows 电源计划…", 8, Theme.Muted);
-            status.SetBounds(S(28), Height - S(77), S(504), S(25));
-            status.Anchor = AnchorStyles.Left | AnchorStyles.Bottom; Controls.Add(status);
-            var tip = Label("关闭窗口后继续驻留托盘", 8, Theme.Muted);
-            tip.SetBounds(S(28), Height - S(38), S(350), S(24));
-            tip.Anchor = AnchorStyles.Left | AnchorStyles.Bottom; Controls.Add(tip);
-            FlatButton exit = Button("退出程序", 454, Height / scale - 40, 78, 28, delegate { ExitApplication(); });
-            exit.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
+            list = Table(1, 0); list.Name = "plans"; list.AutoScroll = true;
+            list.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            root.Controls.Add(list, 0, 2);
+            root.Controls.Add(Label("应用设置", 9.5f, true), 0, 3);
 
-            tray = new NotifyIcon { Icon = appIcon, Text = "电源计划切换器", Visible = !preview };
+            var settingGroup = Table(1, 2);
+            settingGroup.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            settingGroup.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+            settingGroup.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+            hotkeyRow = new SettingRow("全局快捷键", "Ctrl + Alt + 1 ~ 9，按列表顺序切换", theme) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
+            trayRow = new SettingRow("关闭窗口后驻留托盘", "关闭后可从通知区域重新打开", theme) { Dock = DockStyle.Fill, Margin = Padding.Empty };
+            hotkeys = hotkeyRow.Toggle; hotkeys.Name = "hotkeys"; hotkeys.Checked = settings.HotkeysEnabled;
+            closeToTray = trayRow.Toggle; closeToTray.Name = "closeToTray"; closeToTray.Checked = settings.CloseToTray;
+            hotkeys.CheckedChanged += SettingsChanged; closeToTray.CheckedChanged += SettingsChanged;
+            settingGroup.Controls.Add(hotkeyRow, 0, 0); settingGroup.Controls.Add(trayRow, 0, 1);
+            root.Controls.Add(settingGroup, 0, 4);
+
+            var footer = Table(2, 1); footer.Padding = new Padding(0, 8, 0, 0);
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
+            status = Label("正在读取 Windows 电源计划…", 8.5f, false); status.Name = "status";
+            footer.Controls.Add(status, 0, 0);
+            var exit = Button("退出程序", "exit"); exit.Click += delegate { ExitApplication(); };
+            footer.Controls.Add(exit, 1, 0); root.Controls.Add(footer, 0, 5);
+
+            tray = new NotifyIcon { Icon = appIcon, Text = "Power Switch", Visible = !preview };
             tray.MouseClick += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ShowWindow(); };
             tray.ContextMenuStrip = BuildMenu();
             sync = new Timer { Interval = 5000 };
             sync.Tick += async delegate { if (!busy) await RefreshPlans(false); };
             Shown += async delegate
             {
+                FitInitialSize();
                 if (startInTray && !preview) Hide();
-                await RefreshPlans(true); sync.Start();
+                await RefreshPlans(true); InitialLoadComplete = true;
+                if (!exiting) sync.Start();
+                if (!String.IsNullOrEmpty(startupWarning)) ShowStatus(startupWarning, true);
             };
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
-                if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; HideToTray(); }
+                if (!exiting && e.CloseReason == CloseReason.UserClosing && settings.CloseToTray)
+                { e.Cancel = true; HideToTray(); }
+                else { exiting = true; sync.Stop(); tray.Visible = false; }
             };
+            ApplyTheme();
+            ResumeLayout(true);
         }
 
-        private int S(float value) { return (int)Math.Round(value * scale); }
-        private Label Label(string text, float size, Color color, FontStyle style = FontStyle.Regular)
+        private static TableLayoutPanel Table(int columns, int rows)
+        { return new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = columns, RowCount = rows, Margin = Padding.Empty, Padding = Padding.Empty, TabStop = false }; }
+        private static Label Label(string text, float size, bool primary)
         {
-            return new Label { Text = text, Font = Theme.Font(size, style), ForeColor = color,
-                BackColor = Color.Transparent, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
+            return new Label { Text = text, Font = Theme.Font(size, primary ? FontStyle.Bold : FontStyle.Regular, text),
+                Tag = primary ? "primary" : "secondary", Dock = DockStyle.Fill, AutoEllipsis = true,
+                Margin = Padding.Empty, TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false };
         }
-        private void Place(Control control, float x, float y, float width, float height)
-        { control.SetBounds(S(x), S(y), S(width), S(height)); Controls.Add(control); }
-        private FlatButton Button(string text, float x, float y, float width, float height, EventHandler click)
+        private static Button Button(string text, string name)
         {
-            var button = new FlatButton(text); Place(button, x, y, width, height); button.Click += click; return button;
+            var button = new Button { Text = text, Name = name, Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat,
+                Font = Theme.Font(9, FontStyle.Regular, text), Margin = Padding.Empty, Cursor = Cursors.Hand, UseVisualStyleBackColor = false };
+            button.FlatAppearance.BorderSize = 0; return button;
         }
-        private void DragWindow(object sender, MouseEventArgs e)
+        private int S(float value) { return (int)Math.Round(value * DeviceDpi / 96f); }
+        private void FitInitialSize()
         {
-            if (e.Button != MouseButtons.Left) return;
-            NativeMethods.ReleaseCapture(); NativeMethods.SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero);
+            Rectangle work = Screen.FromControl(this).WorkingArea;
+            int count = plans.Count == 0 ? 4 : plans.Count;
+            int content = S(348 + Math.Min(count, 6) * 80 + Math.Max(0, Math.Min(count, 6) - 1) * 8);
+            int chrome = Height - ClientSize.Height;
+            int desired = Math.Min(content, Math.Max(S(430), work.Height - chrome - S(24)));
+            MinimumSize = new Size(Math.Min(S(460), work.Width - S(16)), Math.Min(S(510), work.Height - S(16)));
+            ClientSize = new Size(Math.Min(S(560), work.Width - S(24)), desired);
+            Location = new Point(work.Left + (work.Width - Width) / 2, work.Top + Math.Max(0, (work.Height - Height) / 2));
         }
-        protected override void OnPaint(PaintEventArgs e)
+
+        private void SettingsChanged(object sender, EventArgs e)
         {
-            base.OnPaint(e);
-            using (var pen = new Pen(Color.FromArgb(44, 54, 65)))
+            if (restoringSettings) return;
+            bool previousHotkeys = settings.HotkeysEnabled, previousTray = settings.CloseToTray;
+            settings.HotkeysEnabled = hotkeys.Checked; settings.CloseToTray = closeToTray.Checked;
+            try
             {
-                e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
-                e.Graphics.DrawLine(pen, S(28), Height - S(45), Width - S(28), Height - S(45));
+                settings.Save(settingsPath);
+                if (previousHotkeys != settings.HotkeysEnabled) ConfigureHotkeys();
+                ShowStatus(String.IsNullOrEmpty(hotkeyWarning) ? "设置已保存" : hotkeyWarning, !String.IsNullOrEmpty(hotkeyWarning));
             }
-        }
-        private static Icon CreateIcon()
-        {
-            using (var bitmap = new Bitmap(32, 32))
-            using (Graphics g = Graphics.FromImage(bitmap))
+            catch (Exception ex)
             {
-                g.SmoothingMode = SmoothingMode.AntiAlias; g.Clear(Color.Transparent);
-                using (var brush = new SolidBrush(Color.FromArgb(28, 48, 45))) g.FillEllipse(brush, 1, 1, 30, 30);
-                using (var pen = new Pen(Theme.Accent, 2.8f))
-                {
-                    pen.StartCap = pen.EndCap = LineCap.Round;
-                    g.DrawArc(pen, 8, 8, 16, 17, -52, 284); g.DrawLine(pen, 16, 5, 16, 16);
-                }
-                IntPtr handle = bitmap.GetHicon();
-                try { using (var original = Icon.FromHandle(handle)) return (Icon)original.Clone(); }
-                finally { NativeMethods.DestroyIcon(handle); }
+                settings.HotkeysEnabled = previousHotkeys; settings.CloseToTray = previousTray;
+                restoringSettings = true; hotkeys.Checked = previousHotkeys; closeToTray.Checked = previousTray; restoringSettings = false;
+                ShowStatus("设置未保存，已恢复原设置：" + ex.Message, true);
             }
         }
 
         private async Task RefreshPlans(bool explicitRefresh)
         {
             if (busy || exiting) return;
-            busy = true; refresh.Enabled = false;
+            SetBusy(true, null);
             try
             {
                 IList<PowerPlan> fresh = await Task.Run(() => service.GetPlans());
                 if (exiting || IsDisposed) return;
-                string next = String.Join("|", fresh.Select(p => p.Id + ":" + p.Name + ":" + p.IsActive));
-                bool changed = next != signature;
-                if (changed)
-                {
-                    signature = next; plans = fresh; RenderPlans();
-                    PowerPlan active = plans.FirstOrDefault(p => p.IsActive);
-                    activeName.Text = active == null ? "未知计划，请刷新" : active.Name;
-                    string tooltip = "电源计划：" + (active == null ? "未知" : active.Name);
-                    tray.Text = tooltip.Length > 63 ? tooltip.Substring(0, 63) : tooltip;
-                    countLabel.Text = plans.Count + " 个可用";
-                    ReplaceMenu(); ConfigureHotkeys();
-                }
-                if (explicitRefresh || changed) ShowStatus("已同步 Windows · " + DateTime.Now.ToString("HH:mm:ss"), false);
+                bool changed = ApplyPlans(fresh);
+                if (explicitRefresh || changed)
+                    ShowStatus(String.IsNullOrEmpty(hotkeyWarning) ? "已同步 Windows 电源计划" : hotkeyWarning, !String.IsNullOrEmpty(hotkeyWarning));
             }
             catch (Exception ex) { if (!exiting) ShowStatus(ex.Message, true); }
-            finally { busy = false; if (!exiting && !IsDisposed) refresh.Enabled = true; }
+            finally { if (!exiting) SetBusy(false, null); }
+        }
+
+        private bool ApplyPlans(IList<PowerPlan> fresh)
+        {
+            string nextCatalog = String.Join("|", fresh.Select(p => p.Id + ":" + p.Name));
+            string next = nextCatalog + "|active:" + String.Join(",", fresh.Where(p => p.IsActive).Select(p => p.Id.ToString()));
+            if (next == signature) return false;
+            bool rebuild = nextCatalog != catalogSignature;
+            signature = next; catalogSignature = nextCatalog; plans = fresh;
+            if (rebuild)
+            {
+                RenderPlans(); ConfigureHotkeys();
+                if (!InitialLoadComplete) FitInitialSize();
+            }
+            else
+            {
+                foreach (PowerPlanCard card in list.Controls.OfType<PowerPlanCard>())
+                { card.Plan.IsActive = plans.First(p => p.Id == card.Plan.Id).IsActive; card.Invalidate(); }
+            }
+            PowerPlan active = plans.FirstOrDefault(p => p.IsActive);
+            activeName.Text = "当前：" + (active == null ? "未知，请刷新" : active.Name);
+            tips.SetToolTip(activeName, activeName.Text);
+            sectionTitle.Text = "电源方案 · " + plans.Count;
+            string tooltip = "Power Switch · " + (active == null ? "未知计划" : active.Name);
+            tray.Text = tooltip.Length > 63 ? tooltip.Substring(0, 63) : tooltip;
+            ReplaceMenu(); return true;
         }
 
         private void RenderPlans()
         {
             list.SuspendLayout();
             foreach (Control control in list.Controls.Cast<Control>().ToArray()) control.Dispose();
+            list.RowStyles.Clear(); list.RowCount = plans.Count + 1;
             for (int i = 0; i < plans.Count; i++)
             {
-                PowerPlan plan = plans[i];
-                var button = new PlanButton(plan, scale) { Height = S(82), Width = S(501),
-                    Margin = new Padding(0, 0, 0, S(9)), TabIndex = i };
-                button.Click += async delegate { await SwitchPlan(plan.Id); };
-                list.Controls.Add(button);
+                PowerPlan plan = plans[i]; int gap = i == plans.Count - 1 ? 0 : S(8);
+                list.RowStyles.Add(new RowStyle(SizeType.Absolute, S(80) + gap));
+                var card = new PowerPlanCard(plan, theme) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, gap), TabIndex = i, Enabled = !busy,
+                    DefaultIcon = (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), CustomIcon = settings.GetPlanIcon(plan.Id) };
+                card.Click += async delegate { await SwitchPlan(plan.Id); };
+                card.EditIconRequested += delegate { EditPlanIcon(plan); };
+                tips.SetToolTip(card, plan.Name); list.Controls.Add(card, 0, i);
             }
-            list.ResumeLayout(); SizeCards();
+            list.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            list.ResumeLayout(true);
         }
-        private void SizeCards()
+
+        private void EditPlanIcon(PowerPlan plan)
         {
-            int width = Math.Min(S(502), list.ClientSize.Width - S(3));
-            foreach (Control card in list.Controls) card.Width = Math.Max(S(200), width);
+            if (busy || exiting) return;
+            string defaultIcon = list.Controls.OfType<PowerPlanCard>().First(c => c.Plan.Id == plan.Id).DefaultIcon;
+            using (var dialog = new EmojiIconDialog(plan.Name, settings.GetPlanIcon(plan.Id), theme, icon => SavePlanIcon(plan.Id, icon), defaultIcon))
+                dialog.ShowDialog(this);
+        }
+        internal string SavePlanIcon(Guid id, string icon)
+        {
+            string previous = settings.GetPlanIcon(id);
+            try { settings.SetPlanIcon(id, icon); settings.Save(settingsPath); }
+            catch (Exception ex)
+            {
+                settings.SetPlanIcon(id, previous);
+                ShowStatus("图标未保存：" + ex.Message, true);
+                return "图标未保存：" + ex.Message;
+            }
+            foreach (var card in list.Controls.OfType<PowerPlanCard>().Where(c => c.Plan.Id == id)) card.CustomIcon = icon;
+            ShowStatus(String.IsNullOrEmpty(icon) ? "已恢复默认图标" : "图标已保存", false);
+            return null;
+        }
+
+        private void SetBusy(bool value, Guid? target)
+        {
+            busy = value; refresh.Enabled = !value;
+            foreach (PowerPlanCard card in list.Controls.OfType<PowerPlanCard>())
+            { card.Switching = value && target.HasValue && card.Plan.Id == target.Value; card.Enabled = !value; }
         }
 
         private async Task SwitchPlan(Guid id)
@@ -370,37 +270,39 @@ namespace PowerPlanSwitcher
             PowerPlan selected = plans.FirstOrDefault(p => p.Id == id);
             if (selected == null) return;
             if (selected.IsActive) { ShowStatus("当前已使用「" + selected.Name + "」", false); return; }
-            busy = true; refresh.Enabled = false; list.Enabled = false;
-            ShowStatus("正在切换到「" + selected.Name + "」…", false);
-            Exception failure = null;
-            try { await Task.Run(() => service.Activate(id)); }
-            catch (Exception ex) { failure = ex; }
-            finally { busy = false; if (!exiting && !IsDisposed) { list.Enabled = true; refresh.Enabled = true; } }
-            if (exiting || IsDisposed) return;
-            await RefreshPlans(false);
-            if (failure != null)
+            SetBusy(true, id); ShowStatus("正在切换到「" + selected.Name + "」…", false);
+            try
             {
-                ShowStatus(failure.Message, true);
-                if (!Visible) tray.ShowBalloonTip(4000, "切换失败", failure.Message, ToolTipIcon.Error);
+                IList<PowerPlan> fresh = await Task.Run(() => { service.Activate(id); return service.GetPlans(); });
+                if (exiting || IsDisposed) return;
+                ApplyPlans(fresh);
+                ShowStatus("已切换到「" + selected.Name + "」", false);
+                if (!Visible && !preview) tray.ShowBalloonTip(1600, "电源计划已切换", selected.Name, ToolTipIcon.Info);
             }
-            else
+            catch (Exception ex)
             {
-                ShowStatus("已切换到「" + selected.Name + "」 · " + DateTime.Now.ToString("HH:mm:ss"), false);
-                if (!Visible) tray.ShowBalloonTip(1600, "电源计划已切换", selected.Name, ToolTipIcon.Info);
+                if (!exiting)
+                {
+                    // Keep the last confirmed selection. A later refresh reads actual Windows state.
+                    ShowStatus(ex.Message, true);
+                    if (!Visible && !preview) tray.ShowBalloonTip(4000, "切换失败", ex.Message, ToolTipIcon.Error);
+                }
             }
+            finally { if (!exiting) SetBusy(false, null); }
         }
 
         private ContextMenuStrip BuildMenu()
         {
-            var menu = new ContextMenuStrip { Font = Theme.Font(9), ShowImageMargin = false };
-            menu.Items.Add(new ToolStripMenuItem("电源计划切换器") { Enabled = false });
+            var menu = new ContextMenuStrip { Font = Theme.Font(9, FontStyle.Regular, "电源计划"), ShowImageMargin = true,
+                BackColor = theme.Surface, ForeColor = theme.Text };
+            menu.Renderer = theme.HighContrast ? (ToolStripRenderer)new ToolStripSystemRenderer() : new ToolStripProfessionalRenderer(new MenuColors(theme));
+            menu.Items.Add(new ToolStripMenuItem("Power Switch") { Enabled = false });
             menu.Items.Add(new ToolStripSeparator());
             foreach (PowerPlan plan in plans)
             {
                 Guid id = plan.Id;
-                var item = new ToolStripMenuItem(plan.Name) { Checked = plan.IsActive, CheckOnClick = false, Tag = id };
-                item.Click += async delegate { await SwitchPlan(id); };
-                menu.Items.Add(item);
+                var item = new ToolStripMenuItem(plan.Name) { Checked = plan.IsActive, Tag = id };
+                item.Click += async delegate { await SwitchPlan(id); }; menu.Items.Add(item);
             }
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("打开主窗口", null, delegate { ShowWindow(); });
@@ -409,91 +311,174 @@ namespace PowerPlanSwitcher
             menu.Opening += delegate { foreach (ToolStripItem item in menu.Items) if (item.Tag is Guid) item.Enabled = !busy; };
             return menu;
         }
+        private sealed class MenuColors : ProfessionalColorTable
+        {
+            private readonly Theme theme;
+            internal MenuColors(Theme theme) { this.theme = theme; UseSystemColors = false; }
+            public override Color ToolStripDropDownBackground { get { return theme.Surface; } }
+            public override Color ImageMarginGradientBegin { get { return theme.Surface; } }
+            public override Color ImageMarginGradientMiddle { get { return theme.Surface; } }
+            public override Color ImageMarginGradientEnd { get { return theme.Surface; } }
+            public override Color MenuItemSelected { get { return theme.Hover; } }
+            public override Color MenuItemBorder { get { return theme.Border; } }
+            public override Color MenuBorder { get { return theme.Border; } }
+            public override Color CheckBackground { get { return theme.Selected; } }
+            public override Color CheckSelectedBackground { get { return theme.Selected; } }
+            public override Color SeparatorDark { get { return theme.Border; } }
+            public override Color SeparatorLight { get { return theme.Border; } }
+        }
         private void ReplaceMenu()
         {
+            if (exiting || resourcesDisposed) return;
             ContextMenuStrip previous = tray.ContextMenuStrip;
-            // Never dispose the menu while Windows is still tracking a user's selection.
             if (previous != null && previous.Visible)
             {
-                previous.Closed += MenuClosed;
+                if (!menuUpdatePending) { menuUpdatePending = true; previous.Closed += MenuClosed; }
                 return;
             }
             tray.ContextMenuStrip = BuildMenu();
-            if (previous != null) previous.Dispose();
+            if (previous != null) { Font font = previous.Font; previous.Dispose(); font.Dispose(); }
         }
         private void MenuClosed(object sender, ToolStripDropDownClosedEventArgs e)
         {
-            ((ContextMenuStrip)sender).Closed -= MenuClosed;
+            ((ContextMenuStrip)sender).Closed -= MenuClosed; menuUpdatePending = false;
             if (!exiting && IsHandleCreated) BeginInvoke((Action)ReplaceMenu);
+        }
+        private void ReleaseHotkeys()
+        {
+            if (IsHandleCreated) foreach (int id in registeredKeys) NativeMethods.UnregisterHotKey(Handle, id);
+            registeredKeys.Clear(); keyPlans.Clear();
         }
         private void ConfigureHotkeys()
         {
-            foreach (int id in registeredKeys) NativeMethods.UnregisterHotKey(Handle, id);
-            registeredKeys.Clear(); keyPlans.Clear();
-            var conflicts = new List<string>();
-            int index = 0;
-            foreach (PlanButton card in list.Controls.OfType<PlanButton>())
+            ReleaseHotkeys(); var conflicts = new List<string>(); int index = 0;
+            foreach (PowerPlanCard card in list.Controls.OfType<PowerPlanCard>())
             {
-                card.Shortcut = "点击切换";
-                if (hotkeys.Checked && index < 9 && !preview)
+                card.Shortcut = "";
+                if (settings.HotkeysEnabled && index < 9 && !preview)
                 {
                     int id = 8100 + index;
-                    // MOD_NOREPEAT | MOD_CONTROL | MOD_ALT.
                     if (NativeMethods.RegisterHotKey(Handle, id, 0x4003, (uint)Keys.D1 + (uint)index))
+                    { registeredKeys.Add(id); keyPlans[id] = card.Plan.Id; card.Shortcut = "Ctrl+Alt+" + (index + 1); }
+                    else
                     {
-                        registeredKeys.Add(id); keyPlans[id] = card.Plan.Id;
-                        card.Shortcut = "Ctrl+Alt+" + (index + 1);
+                        int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                        conflicts.Add((index + 1) + "（错误 " + error + "）");
+                        card.Shortcut = error == 1409 ? "快捷键占用" : "快捷键不可用";
                     }
-                    else { conflicts.Add((index + 1).ToString()); card.Shortcut = "快捷键占用"; }
                 }
-                card.Invalidate(); index++;
+                tips.SetToolTip(card, card.Plan.Name + (String.IsNullOrEmpty(card.Shortcut) ? "" : " · " + card.Shortcut) + "\n点击左侧图标，或按 F2 更换表情。");
+                card.AccessibleDescription = card.Shortcut + "。按 F2 更换图标。"; card.Invalidate(); index++;
             }
-            if (conflicts.Count > 0) ShowStatus("快捷键被占用：Ctrl+Alt+" + String.Join(" / ", conflicts) + "；仍可点击切换。", true);
+            hotkeyWarning = conflicts.Count == 0 ? "" : "快捷键注册失败：Ctrl+Alt+" + String.Join(" / ", conflicts) + "，可点击切换。";
         }
         private void ShowStatus(string message, bool error)
+        { statusError = error; status.Text = message; status.ForeColor = error ? theme.Error : theme.Muted; tips.SetToolTip(status, message); }
+        internal void ShowWindow()
         {
-            status.Text = message; status.ForeColor = error ? Color.FromArgb(255, 174, 149) : Theme.Muted;
-            var tip = status.Tag as ToolTip;
-            if (tip == null) { tip = new ToolTip(); status.Tag = tip; }
-            tip.SetToolTip(status, message);
-        }
-        private void ShowWindow()
-        {
-            Show(); WindowState = FormWindowState.Normal; Activate();
-            var ignored = RefreshPlans(false);
+            if (exiting) return;
+            Show(); WindowState = FormWindowState.Normal; Activate(); var ignored = RefreshPlans(false);
         }
         private void HideToTray()
         {
             Hide();
-            if (!hadHiddenTip)
+            if (!hadHiddenTip && !preview)
             {
                 hadHiddenTip = true;
-                tray.ShowBalloonTip(2000, "已在托盘运行", "右键电源图标即可切换计划，左键打开窗口。", ToolTipIcon.Info);
+                tray.ShowBalloonTip(2000, "Power Switch 已在托盘运行", "右键电源图标切换计划，左键重新打开窗口。", ToolTipIcon.Info);
             }
         }
-        internal void ExitApplication()
+        internal void ExitApplication() { exiting = true; sync.Stop(); tray.Visible = false; Close(); }
+
+        private void ApplyTheme()
         {
-            exiting = true; sync.Stop(); tray.Visible = false; Close();
+            if (resourcesDisposed) return;
+            theme = themeOverride ?? Theme.ReadSystem();
+            ApplyControlTheme(this);
+            if (status != null) status.ForeColor = statusError ? theme.Error : theme.Muted;
+            if (IsHandleCreated) NativeMethods.ApplyWindowTheme(Handle, theme);
+            if (tray != null) ReplaceMenu();
+            Invalidate(true);
+        }
+        private void ApplyControlTheme(Control control)
+        {
+            control.BackColor = theme.Background; control.ForeColor = Equals(control.Tag, "primary") ? theme.Text : theme.Muted;
+            var card = control as PowerPlanCard; if (card != null) card.Palette = theme;
+            var setting = control as SettingRow; if (setting != null) setting.Palette = theme;
+            var toggle = control as ToggleSwitch; if (toggle != null) { toggle.Palette = theme; toggle.BackColor = theme.Surface; }
+            var button = control as Button;
+            if (button != null)
+            { button.ForeColor = theme.Text; button.FlatAppearance.MouseOverBackColor = theme.Hover; button.FlatAppearance.MouseDownBackColor = theme.Selected; }
+            foreach (Control child in control.Controls) ApplyControlTheme(child);
+            control.Invalidate();
+        }
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (theme != null) NativeMethods.ApplyWindowTheme(Handle, theme);
+            if (list != null && plans.Count > 0 && !exiting) ConfigureHotkeys();
+        }
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            ReleaseHotkeys();
+            base.OnHandleDestroyed(e);
+        }
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            base.OnDpiChanged(e);
+            Rectangle work = Screen.FromControl(this).WorkingArea;
+            MinimumSize = new Size(Math.Min(S(460), work.Width - S(16)), Math.Min(S(510), work.Height - S(16)));
         }
         protected override void WndProc(ref Message message)
         {
             if (message.Msg == NativeMethods.ShowMessage) { ShowWindow(); return; }
             if (message.Msg == 0x0312)
             {
-                Guid id;
-                if (keyPlans.TryGetValue(message.WParam.ToInt32(), out id)) { var ignored = SwitchPlan(id); }
+                Guid id; if (keyPlans.TryGetValue(message.WParam.ToInt32(), out id)) { var ignored = SwitchPlan(id); }
             }
+            bool themeChanged = message.Msg == 0x001A || message.Msg == 0x031A || message.Msg == 0x0015 || message.Msg == 0x0320;
             base.WndProc(ref message);
+            if (themeChanged && root != null && !exiting && !resourcesDisposed && IsHandleCreated) BeginInvoke((Action)ApplyTheme);
+        }
+        internal void SavePreview(string path)
+        {
+            using (var bitmap = new Bitmap(root.Width, root.Height))
+            { root.DrawToBitmap(bitmap, root.ClientRectangle); bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png); }
+        }
+        private static Icon CreateIcon()
+        {
+            using (var bitmap = new Bitmap(32, 32))
+            using (Graphics g = Graphics.FromImage(bitmap))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias; g.Clear(Color.Transparent);
+                using (var brush = new SolidBrush(Color.FromArgb(32, 32, 32))) g.FillEllipse(brush, 1, 1, 30, 30);
+                using (var pen = new Pen(Color.FromArgb(96, 205, 255), 2.8f))
+                { pen.StartCap = pen.EndCap = LineCap.Round; g.DrawArc(pen, 8, 8, 16, 17, -52, 284); g.DrawLine(pen, 16, 5, 16, 16); }
+                IntPtr handle = bitmap.GetHicon();
+                try { using (var original = Icon.FromHandle(handle)) return (Icon)original.Clone(); }
+                finally { NativeMethods.DestroyIcon(handle); }
+            }
+        }
+        private static void DisposeFonts(Control control)
+        {
+            foreach (Control child in control.Controls) DisposeFonts(child);
+            if (control is Label || control is Button) control.Font.Dispose();
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !resourcesDisposed)
             {
-                foreach (int id in registeredKeys) NativeMethods.UnregisterHotKey(Handle, id);
+                resourcesDisposed = true; exiting = true; ReleaseHotkeys();
                 if (sync != null) sync.Dispose();
-                if (tray != null) { if (tray.ContextMenuStrip != null) tray.ContextMenuStrip.Dispose(); tray.Dispose(); }
-                if (appIcon != null) appIcon.Dispose();
-                if (status != null && status.Tag is ToolTip) ((ToolTip)status.Tag).Dispose();
+                if (tray != null)
+                {
+                    tray.Visible = false;
+                    if (tray.ContextMenuStrip != null) { Font font = tray.ContextMenuStrip.Font; tray.ContextMenuStrip.Dispose(); font.Dispose(); }
+                    tray.Dispose();
+                }
+                tips.Dispose(); if (appIcon != null) appIcon.Dispose();
+                DisposeFonts(this);
+                Font.Dispose();
             }
             base.Dispose(disposing);
         }
