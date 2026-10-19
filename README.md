@@ -1,6 +1,6 @@
-# Power Switch · 电源计划切换器
+# PowerPlanSwitcher · 电源计划切换器
 
-当前版本：**2.0.0**。从 [GitHub Releases](https://github.com/zjl1137064863-blip/PowerPlanSwitcher/releases/latest) 下载完整程序包；[查看本版更新](docs/releases/v2.0.0.md)。
+当前版本：**v2.0.0**。从 [GitHub Releases](https://github.com/zjl1137064863-blip/PowerPlanSwitcher/releases/latest) 下载完整程序包；[查看本版更新](docs/releases/v2.0.0.md)。
 
 一个轻量的 Windows WinForms 托盘小程序，可直接切换系统已有的电源计划，支持自定义计划与中文名称。界面采用紧凑的 Fluent 风格，跟随 Windows 深浅主题、强调色及高对比度设置。
 
