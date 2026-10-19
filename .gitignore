@@ -1,0 +1,7 @@
+dist/settings.ini
+artifacts/*.exe
+artifacts/*.pdb
+
+dist/
+artifacts/
+*.zip
