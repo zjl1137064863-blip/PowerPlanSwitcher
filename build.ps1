@@ -1,4 +1,4 @@
-param([switch]$Test)
+param([switch]$Test, [switch]$Package)
 $ErrorActionPreference = 'Stop'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) {
@@ -12,6 +12,7 @@ $sources = @(Get-ChildItem -LiteralPath $sourceDirectory -Filter '*.cs' | ForEac
 $executable = Join-Path $outputDirectory 'PowerPlanSwitcher.exe'
 & $compiler /nologo /utf8output /target:winexe /platform:anycpu /optimize+ "/out:$executable" "/win32manifest:$sourceDirectory\app.manifest" "/win32icon:$sourceDirectory\app.ico" /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll @sources
 if ($LASTEXITCODE -ne 0) { throw 'Application build failed.' }
+Copy-Item -LiteralPath (Join-Path $sourceDirectory 'app.config') -Destination ($executable + '.config') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $outputDirectory 'README.md') -Force
 Write-Host "Built: $executable"
 if ($Test) {
@@ -25,6 +26,18 @@ if ($Test) {
     $uiTestExecutable = Join-Path $testDirectory 'PowerPlanSwitcher.UiSmoke.exe'
     & $compiler /nologo /utf8output /target:exe /main:UiSmoke /optimize+ "/out:$uiTestExecutable" /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll @sources (Join-Path $PSScriptRoot 'tests\UiSmoke.cs')
     if ($LASTEXITCODE -ne 0) { throw 'UI smoke test build failed.' }
+    Copy-Item -LiteralPath (Join-Path $sourceDirectory 'app.config') -Destination ($uiTestExecutable + '.config') -Force
     & $uiTestExecutable
     if ($LASTEXITCODE -ne 0) { throw 'UI smoke test failed.' }
+    $emojiTestExecutable = Join-Path $testDirectory 'PowerPlanSwitcher.EmojiTests.exe'
+    & $compiler /nologo /utf8output /target:exe /main:EmojiTests /optimize+ "/out:$emojiTestExecutable" /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll @sources (Join-Path $PSScriptRoot 'tests\EmojiTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Emoji test build failed.' }
+    Copy-Item -LiteralPath (Join-Path $sourceDirectory 'app.config') -Destination ($emojiTestExecutable + '.config') -Force
+    & $emojiTestExecutable
+    if ($LASTEXITCODE -ne 0) { throw 'Emoji tests failed.' }
+}
+if ($Package) {
+    $packagePath = Join-Path $PSScriptRoot 'PowerPlanSwitcher.zip'
+    Compress-Archive -LiteralPath $executable,($executable + '.config'),(Join-Path $outputDirectory 'README.md') -DestinationPath $packagePath -Force
+    Write-Host "Packaged: $packagePath"
 }
